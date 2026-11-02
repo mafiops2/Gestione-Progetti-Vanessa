@@ -151,8 +151,38 @@ if "editor_key" not in st.session_state:
   st.session_state.editor_key = 0
 if "msg_errore" not in st.session_state:
   st.session_state.msg_errore = ""
+if "riga_da_eliminare" not in st.session_state:
+  st.session_state.riga_da_eliminare = None
 
-# --- MENU LATERALE A SCOMPARSA: "Nuovo progetto" (Subito visibile all'apertura della barra) ---
+
+# --- FINESTRA DI DIALOGO PER CONFERMA ELIMINAZIONE ---
+@st.dialog("Conferma eliminazione")
+def conferma_eliminazione_dialog(idx):
+  riga = st.session_state.data.loc[idx]
+  st.write(
+      f"Sei sicuro di voler eliminare il progetto **{riga['Nome_Progetto']}**"
+      f" del cliente **{riga['Cliente']}** ({riga['ID_Progetto']})?"
+  )
+  col1, col2 = st.columns(2)
+  with col1:
+    if st.button(
+        "Conferma elimina", type="primary", use_container_width=True
+    ):
+      st.session_state.data = (
+          st.session_state.data.drop(index=idx).reset_index(drop=True)
+      )
+      salva_dati(st.session_state.data)
+      st.session_state.riga_da_eliminare = None
+      st.session_state.editor_key += 1
+      st.rerun()
+  with col2:
+    if st.button("Annulla", use_container_width=True):
+      st.session_state.riga_da_eliminare = None
+      st.session_state.editor_key += 1
+      st.rerun()
+
+
+# --- MENU LATERALE A SCOMPARSA: "Nuovo progetto" ---
 with st.sidebar:
   st.header("Nuovo progetto")
   with st.form("form_nuovo_progetto", clear_on_submit=True):
@@ -162,6 +192,9 @@ with st.sidebar:
     data_acq = st.date_input(
         "Data di Acquisizione", value=datetime.today(), format="DD-MM-YYYY"
     )
+    data_term = st.date_input(
+        "Data di Termine", value=datetime.today(), format="DD-MM-YYYY"
+    )
     ha_prov_toggle = st.toggle("Ha Provvigione", value=True)
     perc_prov = st.number_input(
         "Provvigione (%)", min_value=0.0, max_value=100.0, step=1.0, value=20.0
@@ -169,7 +202,7 @@ with st.sidebar:
 
     submitted = st.form_submit_button("Inserisci in tabella")
     if submitted:
-      if cli.strip() and nom_p.strip():
+      if cli.strip() and nom_p.strip() and data_acq and data_term:
         df_curr = st.session_state.data
         existing_nums = [
             int(str(i).split("-")[1])
@@ -191,7 +224,7 @@ with st.sidebar:
             "Ha_Provvigione": bool(ha_prov_toggle),
             "Perc_Provvigione": float(eff_perc),
             "Provvigione_Euro": float(eff_euro),
-            "Data_Termine": pd.NaT,
+            "Data_Termine": pd.to_datetime(data_term),
             "Data_Emissione_Fattura": pd.NaT,
             "Numero_Fattura": "",
             "Data_Scadenza_Fattura": pd.NaT,
@@ -206,7 +239,10 @@ with st.sidebar:
         st.session_state.editor_key += 1
         st.rerun()
       else:
-        st.error("Compila Ragione Sociale Cliente e Nome Progetto.")
+        st.error(
+            "Compila tutti i campi obbligatori (Cliente, Progetto, Data"
+            " Acquisizione e Data Termine)."
+        )
 
 # --- TITOLO E UNICA TABELLA SOTTOSTANTE ---
 st.title("Vaneblandy")
@@ -215,9 +251,9 @@ if st.session_state.msg_errore:
   st.toast(st.session_state.msg_errore, icon="⚠️")
   st.session_state.msg_errore = ""
 
-# Prepariamo il dataframe con la colonna tasto "Elimina"
+# Posizioniamo la colonna "Elimina" come PRIMA colonna a sinistra
 df_display = st.session_state.data.copy()
-df_display["Elimina"] = False
+df_display.insert(0, "Elimina", False)
 
 
 def colora_righe(row):
@@ -244,6 +280,7 @@ def colora_righe(row):
 styled_df = df_display.style.apply(colora_righe, axis=1)
 
 column_cfg = {
+    "Elimina": st.column_config.CheckboxColumn("🗑️", width="small"),
     "ID_Progetto": st.column_config.TextColumn("ID", disabled=True),
     "Cliente": st.column_config.TextColumn("Cliente"),
     "Nome_Progetto": st.column_config.TextColumn("Progetto"),
@@ -272,30 +309,29 @@ column_cfg = {
     "Fattura_Pagamento_Provvigione": st.column_config.TextColumn(
         "Fatt. Provv. Luana"
     ),
-    "Elimina": st.column_config.CheckboxColumn("🗑️ Elimina"),
 }
 
-# UNICA TABELLA A SCHERMO (Modificabile + Colorata + Cancellazione riga)
+# Ordine esplicito delle colonne con "Elimina" al primo posto
+column_order = ["Elimina"] + COLUMNS
+
+# UNICA TABELLA A SCHERMO
 edited_df = st.data_editor(
     styled_df,
     column_config=column_cfg,
+    column_order=column_order,
     use_container_width=True,
     hide_index=True,
     num_rows="fixed",
     key=f"tabella_{st.session_state.editor_key}",
 )
 
-# 1. Gestione eliminazione riga tramite il tasto sulla riga
+# 1. Gestione richiesta di eliminazione sulla prima colonna con finestra di conferma
 if edited_df["Elimina"].any():
-  df_rimasto = (
-      edited_df[~edited_df["Elimina"]].drop(columns=["Elimina"]).reset_index(
-          drop=True
-      )
-  )
-  st.session_state.data = normalizza_tipi(df_rimasto)
-  salva_dati(st.session_state.data)
-  st.session_state.editor_key += 1
-  st.rerun()
+  idx_to_del = edited_df[edited_df["Elimina"]].index[0]
+  st.session_state.riga_da_eliminare = idx_to_del
+
+if st.session_state.riga_da_eliminare is not None:
+  conferma_eliminazione_dialog(st.session_state.riga_da_eliminare)
 
 # 2. Gestione modifiche, calcoli automatici e blocchi sulle provvigioni
 df_clean = normalizza_tipi(edited_df.drop(columns=["Elimina"]))
@@ -339,7 +375,6 @@ for idx in df_clean.index:
 
   if prov_fatt != "" and pd.isna(data_pag):
     if old_prov_fatt != "" and pd.notna(old_data_pag):
-      # Tentativo di cancellare la data di pagamento mentre c'è già la fattura della manager
       df_clean.at[idx, "Data_Pagamento"] = old_data_pag
       st.session_state.msg_errore = (
           "Non puoi rimuovere la data di pagamento se è presente la fattura"
@@ -347,7 +382,6 @@ for idx in df_clean.index:
       )
       errore_rilevato = True
     else:
-      # Tentativo di inserire la fattura della manager su un progetto non pagato
       df_clean.at[idx, "Fattura_Pagamento_Provvigione"] = ""
       st.session_state.msg_errore = (
           "La manager non può fatturare la provvigione su un progetto non"
@@ -355,7 +389,7 @@ for idx in df_clean.index:
       )
       errore_rilevato = True
 
-if (
+if st.session_state.riga_da_eliminare is None and (
     modificato
     or errore_rilevato
     or not df_clean.astype(str).equals(old_df.astype(str))
