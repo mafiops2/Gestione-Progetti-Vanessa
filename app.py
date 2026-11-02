@@ -39,8 +39,6 @@ if "data" not in st.session_state:
 
 def elabora_e_valida(df_in):
   df_el = df_in.copy()
-
-  # Conversione valore numerico
   df_el["Valore_num"] = pd.to_numeric(
       df_el["Valore"].astype(str).str.replace(",", "."), errors="coerce"
   ).fillna(0.0)
@@ -72,13 +70,12 @@ def elabora_e_valida(df_in):
       val_perc = 0.0
     else:
       if pd.isna(val_perc) or val_perc == 0.0:
-        val_perc = 20.0  # Default 20%
+        val_perc = 20.0
 
     perc_list.append(str(val_perc))
     val_euro = row["Valore_num"] * (val_perc / 100.0) if ha_prov else 0.0
     prov_euro_list.append(str(val_euro))
 
-    # Controllo coerenza pagamenti manager
     data_pag = str(row.get("Data_Pagamento", "")).strip()
     prov_fatt = str(row.get("Fattura_Pagamento_Provvigione", "")).strip()
 
@@ -100,7 +97,6 @@ def colora_righe(row):
   oggi = pd.Timestamp(datetime.today().date())
   num_fatt = str(row.get("Numero_Fattura", "")).strip()
 
-  # Parsing data in formato italiano DD/MM/YYYY
   data_scad_raw = str(row.get("Data_Scadenza_Fattura", "")).strip()
   data_scad = pd.to_datetime(data_scad_raw, format="%d/%m/%Y", errors="coerce")
   if pd.isna(data_scad):
@@ -110,94 +106,20 @@ def colora_righe(row):
   prov_fatt = str(row.get("Fattura_Pagamento_Provvigione", "")).strip()
 
   if prov_fatt and prov_fatt != "" and prov_fatt.lower() != "nan":
-    return ["background-color: #e0f2fe"] * len(row)  # Azzurro
+    return ["background-color: #e0f2fe"] * len(row)
   if data_pag and data_pag != "" and data_pag.lower() != "nan":
-    return ["background-color: #dcfce7"] * len(row)  # Verde
+    return ["background-color: #dcfce7"] * len(row)
   if not num_fatt or num_fatt == "" or num_fatt.lower() == "nan":
-    return ["background-color: #ffffff"] * len(row)  # Bianco
+    return ["background-color: #ffffff"] * len(row)
   if pd.notna(data_scad):
     if oggi > data_scad:
-      return ["background-color: #fee2e2"] * len(row)  # Rosso
+      return ["background-color: #fee2e2"] * len(row)
     else:
-      return ["background-color: #fce7f3"] * len(row)  # Rosa
+      return ["background-color: #fce7f3"] * len(row)
   return ["background-color: #ffffff"] * len(row)
 
 
-# --- TITOLO ---
+# --- TITOLO PULITO ---
 st.title("Vaneblandy")
 
-# --- POPUP / SIDEBAR A SCOMPARSA PER NUOVO PROGETTO ---
-with st.sidebar:
-  st.header("➕ Nuovo Progetto")
-  with st.form("form_nuovo_progetto", clear_on_submit=True):
-    cli = st.text_input("Ragione Sociale Cliente")
-    nom_p = st.text_input("Nome Progetto")
-    val = st.number_input("Valore (€)", min_value=0.0, step=100.0)
-    data_acq = st.date_input("Data di Acquisizione")
-
-    ha_prov_toggle = st.toggle(
-        "La manager (Luana) ha una provvigione?", value=True
-    )
-    perc_prov = st.number_input(
-        "Provvigione (%)", min_value=0.0, max_value=100.0, step=1.0, value=20.0
-    )
-
-    submitted = st.form_submit_button("Salva Progetto")
-    if submitted:
-      if cli and nom_p:
-        nuovo_id = f"PRJ-{len(st.session_state.data)+1:03d}"
-        data_acq_str = data_acq.strftime("%d/%m/%Y")
-        nuova_riga = {
-            "ID_Progetto": nuovo_id,
-            "Cliente": cli,
-            "Nome_Progetto": nom_p,
-            "Valore": str(val),
-            "Data_Acquisizione": data_acq_str,
-            "Ha_Provvigione": "Sì" if ha_prov_toggle else "No",
-            "Perc_Provvigione": str(perc_prov) if ha_prov_toggle else "0.0",
-            "Provvigione_Euro": (
-                str(val * (perc_prov / 100.0)) if ha_prov_toggle else "0.0"
-            ),
-            "Data_Termine": "",
-            "Data_Emissione_Fattura": "",
-            "Numero_Fattura": "",
-            "Data_Scadenza_Fattura": "",
-            "Data_Pagamento": "",
-            "Fattura_Pagamento_Provvigione": "",
-        }
-        st.session_state.data = pd.concat(
-            [st.session_state.data, pd.DataFrame([nuova_riga])],
-            ignore_index=True,
-        )
-        cols_to_save = [
-            c
-            for c in st.session_state.data.columns
-            if c not in ["Valore_num", "Provvigione_Euro"]
-        ]
-        st.session_state.data[cols_to_save].to_excel(EXCEL_FILE, index=False)
-        st.success("Progetto aggiunto con successo!")
-        st.rerun()
-      else:
-        st.error("Inserisci almeno Cliente e Nome Progetto.")
-
-# --- TABELLA EDITABILE A SCHERMO (Tutte le colonne visibili) ---
-edited_df = st.data_editor(
-    st.session_state.data,
-    num_rows="dynamic",
-    use_container_width=True,
-    disabled=["ID_Progetto"],
-)
-
-processed_df = elabora_e_valida(edited_df)
-
-cols_to_save = [
-    c for c in processed_df.columns if c not in ["Valore_num", "Provvigione_Euro"]
-]
-clean_saved_df = processed_df[cols_to_save]
-
-if not clean_saved_df.equals(st.session_state.data):
-  st.session_state.data = clean_saved_df
-  st.session_state.data.to_excel(EXCEL_FILE, index=False)
-
-styled_table = processed_df.style.apply(colora_righe, axis=1)
-st.dataframe(styled_table, use_container_width=True, hide_index=True)
+# --- MENU LATERALE A SCOMPARSA (SI APRE DAL PULSANTE FRECCIA IN ALTO A SINIST
