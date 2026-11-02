@@ -60,13 +60,16 @@ STR_COLS = [
 def parse_date(val):
     if pd.isna(val) or str(val).strip() in ["", "None", "NaT", "nan"]:
         return pd.NaT
+    if isinstance(val, (pd.Timestamp, datetime)):
+        return pd.Timestamp(val).normalize()
     s = str(val).strip()
     for fmt in ["%d-%m-%Y", "%Y-%m-%d", "%d/%m/%Y"]:
         try:
-            return pd.to_datetime(s, format=fmt)
+            return pd.to_datetime(s, format=fmt).normalize()
         except ValueError:
             pass
-    return pd.to_datetime(s, dayfirst=True, errors="coerce")
+    dt = pd.to_datetime(s, dayfirst=True, errors="coerce")
+    return dt.normalize() if pd.notna(dt) else pd.NaT
 
 
 def format_date_str(val):
@@ -76,9 +79,13 @@ def format_date_str(val):
 
 def normalizza_tipi(df_in):
     df = df_in.copy()
-    df["Valore"] = pd.to_numeric(
-        df["Valore"].astype(str).str.replace(",", "."), errors="coerce"
-    ).fillna(0.0)
+    df["Valore"] = (
+        pd.to_numeric(
+            df["Valore"].astype(str).str.replace(",", "."), errors="coerce"
+        )
+        .fillna(0.0)
+        .round(2)
+    )
     df["Ha_Provvigione"] = df["Ha_Provvigione"].apply(
         lambda x: True
         if (
@@ -87,19 +94,33 @@ def normalizza_tipi(df_in):
         )
         else False
     )
-    df["Perc_Provvigione"] = pd.to_numeric(
-        df["Perc_Provvigione"].astype(str).str.replace(",", "."), errors="coerce"
-    ).fillna(0.0)
-    df["Provvigione_Euro"] = pd.to_numeric(
-        df["Provvigione_Euro"].astype(str).str.replace(",", "."), errors="coerce"
-    ).fillna(0.0)
+    df["Perc_Provvigione"] = (
+        pd.to_numeric(
+            df["Perc_Provvigione"].astype(str).str.replace(",", "."),
+            errors="coerce",
+        )
+        .fillna(0.0)
+        .round(1)
+    )
+    df["Provvigione_Euro"] = (
+        pd.to_numeric(
+            df["Provvigione_Euro"].astype(str).str.replace(",", "."),
+            errors="coerce",
+        )
+        .fillna(0.0)
+        .round(2)
+    )
 
     for d_col in DATE_COLS:
         df[d_col] = df[d_col].apply(parse_date)
 
     for s_col in STR_COLS:
         df[s_col] = (
-            df[s_col].fillna("").astype(str).replace(["nan", "None", "NaT"], "")
+            df[s_col]
+            .fillna("")
+            .astype(str)
+            .replace(["nan", "None", "NaT"], "")
+            .str.strip()
         )
 
     return df
@@ -140,6 +161,28 @@ def carica_dati():
         )
         salva_dati(df)
     return normalizza_tipi(df)
+
+
+def df_uguali(df1, df2):
+    if len(df1) != len(df2):
+        return False
+    for col in COLUMNS:
+        if col in DATE_COLS:
+            s1 = df1[col].apply(format_date_str).tolist()
+            s2 = df2[col].apply(format_date_str).tolist()
+            if s1 != s2:
+                return False
+        elif col in ["Valore", "Perc_Provvigione", "Provvigione_Euro"]:
+            s1 = df1[col].round(2).tolist()
+            s2 = df2[col].round(2).tolist()
+            if s1 != s2:
+                return False
+        else:
+            s1 = df1[col].tolist()
+            s2 = df2[col].tolist()
+            if s1 != s2:
+                return False
+    return True
 
 
 if "data" not in st.session_state:
@@ -217,11 +260,11 @@ with st.sidebar:
                             "Cliente": cli.strip(),
                             "Nome_Progetto": nom_p.strip(),
                             "Valore": float(val),
-                            "Data_Acquisizione": pd.to_datetime(data_acq),
+                            "Data_Acquisizione": pd.Timestamp(data_acq).normalize(),
                             "Ha_Provvigione": bool(ha_prov_toggle),
                             "Perc_Provvigione": float(eff_perc),
                             "Provvigione_Euro": float(eff_euro),
-                            "Data_Termine": pd.to_datetime(data_term),
+                            "Data_Termine": pd.Timestamp(data_term).normalize(),
                             "Data_Emissione_Fattura": pd.NaT,
                             "Numero_Fattura": "",
                             "Data_Scadenza_Fattura": pd.NaT,
@@ -248,142 +291,3 @@ st.title("Vaneblandy")
 if st.session_state.msg_errore:
     st.toast(st.session_state.msg_errore, icon="⚠️")
     st.session_state.msg_errore = ""
-
-df_display = st.session_state.data.copy()
-df_display.insert(0, "Elimina", False)
-
-
-def colora_righe(row):
-    oggi = pd.Timestamp(datetime.today().date())
-    num_fatt = str(row.get("Numero_Fattura", "")).strip()
-    data_scad = row.get("Data_Scadenza_Fattura", pd.NaT)
-    data_pag = row.get("Data_Pagamento", pd.NaT)
-    prov_fatt = str(row.get("Fattura_Pagamento_Provvigione", "")).strip()
-
-    if prov_fatt != "":
-        color = "#e0f2fe"  # Azzurro: fattura provvigione manager presente
-    elif pd.notna(data_pag):
-        color = "#dcfce7"  # Verde: fattura pagata
-    elif num_fatt == "":
-        color = "#ffffff"  # Bianco: nessuna fattura
-    elif pd.notna(data_scad) and oggi > pd.Timestamp(data_scad):
-        color = "#fee2e2"  # Rosso: non pagata e scadenza superata
-    else:
-        color = "#fce7f3"  # Rosa: non pagata e scadenza non superata
-
-    return [f"background-color: {color}; color: #000000"] * len(row)
-
-
-styled_df = df_display.style.apply(colora_righe, axis=1)
-
-column_cfg = {
-    "Elimina": st.column_config.CheckboxColumn("🗑️", width="small"),
-    "ID_Progetto": st.column_config.TextColumn("ID", disabled=True),
-    "Cliente": st.column_config.TextColumn("Cliente"),
-    "Nome_Progetto": st.column_config.TextColumn("Progetto"),
-    "Valore": st.column_config.NumberColumn("Valore (€)", format="%.2f"),
-    "Data_Acquisizione": st.column_config.DateColumn(
-        "Data Acq.", format="DD-MM-YYYY"
-    ),
-    "Ha_Provvigione": st.column_config.CheckboxColumn("Ha_Provvigione"),
-    "Perc_Provvigione": st.column_config.NumberColumn("Provv. %", format="%.1f"),
-    "Provvigione_Euro": st.column_config.NumberColumn(
-        "Valore Provv. (€)", format="%.2f", disabled=True
-    ),
-    "Data_Termine": st.column_config.DateColumn(
-        "Data Termine", format="DD-MM-YYYY"
-    ),
-    "Data_Emissione_Fattura": st.column_config.DateColumn(
-        "Data Fattura", format="DD-MM-YYYY"
-    ),
-    "Numero_Fattura": st.column_config.TextColumn("N. Fattura"),
-    "Data_Scadenza_Fattura": st.column_config.DateColumn(
-        "Scadenza Fatt.", format="DD-MM-YYYY"
-    ),
-    "Data_Pagamento": st.column_config.DateColumn(
-        "Data Pagamento", format="DD-MM-YYYY"
-    ),
-    "Fattura_Pagamento_Provvigione": st.column_config.TextColumn(
-        "Fatt. Provv. Luana"
-    ),
-}
-
-edited_df = st.data_editor(
-    styled_df,
-    column_config=column_cfg,
-    column_order=["Elimina"] + COLUMNS,
-    use_container_width=True,
-    height=600,
-    hide_index=True,
-    num_rows="fixed",
-    key=f"tabella_{st.session_state.editor_key}",
-)
-
-if edited_df["Elimina"].any():
-    idx_to_del = edited_df[edited_df["Elimina"]].index[0]
-    st.session_state.riga_da_eliminare = idx_to_del
-
-if st.session_state.riga_da_eliminare is not None:
-    conferma_eliminazione_dialog(st.session_state.riga_da_eliminare)
-
-df_clean = normalizza_tipi(edited_df.drop(columns=["Elimina"]))
-old_df = st.session_state.data
-
-modificato = False
-errore_rilevato = False
-
-for idx in df_clean.index:
-    row = df_clean.loc[idx]
-    old_row = old_df.loc[idx]
-
-    ha_prov = bool(row["Ha_Provvigione"])
-    old_ha_prov = bool(old_row["Ha_Provvigione"])
-    perc = float(row["Perc_Provvigione"])
-    valore = float(row["Valore"])
-
-    if not ha_prov:
-        if perc != 0.0:
-            df_clean.at[idx, "Perc_Provvigione"] = 0.0
-            perc = 0.0
-            modificato = True
-    else:
-        if not old_ha_prov or perc == 0.0:
-            df_clean.at[idx, "Perc_Provvigione"] = 20.0
-            perc = 20.0
-            modificato = True
-
-    nuovo_euro = round(valore * (perc / 100.0), 2) if ha_prov else 0.0
-    if float(row["Provvigione_Euro"]) != nuovo_euro:
-        df_clean.at[idx, "Provvigione_Euro"] = nuovo_euro
-        modificato = True
-
-    data_pag = row["Data_Pagamento"]
-    old_data_pag = old_row["Data_Pagamento"]
-    prov_fatt = str(row["Fattura_Pagamento_Provvigione"]).strip()
-    old_prov_fatt = str(old_row["Fattura_Pagamento_Provvigione"]).strip()
-
-    if prov_fatt != "" and pd.isna(data_pag):
-        if old_prov_fatt != "" and pd.notna(old_data_pag):
-            df_clean.at[idx, "Data_Pagamento"] = old_data_pag
-            st.session_state.msg_errore = (
-                "Non puoi rimuovere la data di pagamento se è presente "
-                "la fattura provvigione della manager."
-            )
-            errore_rilevato = True
-        else:
-            df_clean.at[idx, "Fattura_Pagamento_Provvigione"] = ""
-            st.session_state.msg_errore = (
-                "La manager non può fatturare la provvigione su un "
-                "progetto non ancora pagato."
-            )
-            errore_rilevato = True
-
-if st.session_state.riga_da_eliminare is None and (
-    modificato
-    or errore_rilevato
-    or not df_clean.astype(str).equals(old_df.astype(str))
-):
-    st.session_state.data = df_clean
-    salva_dati(df_clean)
-    st.session_state.editor_key += 1
-    st.rerun()
