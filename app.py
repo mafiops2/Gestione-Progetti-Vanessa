@@ -291,3 +291,147 @@ st.title("Vaneblandy")
 if st.session_state.msg_errore:
     st.toast(st.session_state.msg_errore, icon="⚠️")
     st.session_state.msg_errore = ""
+
+# Prima colonna con icona cestino 🗑️ sempre visibile su ogni riga
+df_display = st.session_state.data.copy()
+df_display.insert(0, "Elimina", "🗑️")
+
+
+def colora_righe(row):
+    oggi = pd.Timestamp(datetime.today().date())
+    num_fatt = str(row.get("Numero_Fattura", "")).strip()
+    data_scad = row.get("Data_Scadenza_Fattura", pd.NaT)
+    data_pag = row.get("Data_Pagamento", pd.NaT)
+    prov_fatt = str(row.get("Fattura_Pagamento_Provvigione", "")).strip()
+
+    if prov_fatt != "":
+        color = "#e0f2fe"  # Azzurro: fattura provvigione manager presente
+    elif pd.notna(data_pag):
+        color = "#dcfce7"  # Verde: fattura pagata
+    elif num_fatt == "":
+        color = "#ffffff"  # Bianco: nessuna fattura
+    elif pd.notna(data_scad) and oggi > pd.Timestamp(data_scad):
+        color = "#fee2e2"  # Rosso: non pagata e scadenza superata
+    else:
+        color = "#fce7f3"  # Rosa: non pagata e scadenza non superata
+
+    return [f"background-color: {color}; color: #000000"] * len(row)
+
+
+styled_df = df_display.style.apply(colora_righe, axis=1)
+
+column_cfg = {
+    "Elimina": st.column_config.SelectboxColumn(
+        "🗑️",
+        options=["🗑️", "🗑️ Elimina"],
+        required=True,
+        width="small",
+    ),
+    "ID_Progetto": st.column_config.TextColumn("ID", disabled=True),
+    "Cliente": st.column_config.TextColumn("Cliente"),
+    "Nome_Progetto": st.column_config.TextColumn("Progetto"),
+    "Valore": st.column_config.NumberColumn("Valore (€)", format="%.2f"),
+    "Data_Acquisizione": st.column_config.DateColumn(
+        "Data Acq.", format="DD-MM-YYYY"
+    ),
+    "Ha_Provvigione": st.column_config.CheckboxColumn("Ha_Provvigione"),
+    "Perc_Provvigione": st.column_config.NumberColumn("Provv. %", format="%.1f"),
+    "Provvigione_Euro": st.column_config.NumberColumn(
+        "Valore Provv. (€)", format="%.2f", disabled=True
+    ),
+    "Data_Termine": st.column_config.DateColumn(
+        "Data Termine", format="DD-MM-YYYY"
+    ),
+    "Data_Emissione_Fattura": st.column_config.DateColumn(
+        "Data Fattura", format="DD-MM-YYYY"
+    ),
+    "Numero_Fattura": st.column_config.TextColumn("N. Fattura"),
+    "Data_Scadenza_Fattura": st.column_config.DateColumn(
+        "Scadenza Fatt.", format="DD-MM-YYYY"
+    ),
+    "Data_Pagamento": st.column_config.DateColumn(
+        "Data Pagamento", format="DD-MM-YYYY"
+    ),
+    "Fattura_Pagamento_Provvigione": st.column_config.TextColumn(
+        "Fatt. Provv. Luana"
+    ),
+}
+
+edited_df = st.data_editor(
+    styled_df,
+    column_config=column_cfg,
+    column_order=["Elimina"] + COLUMNS,
+    use_container_width=True,
+    height=600,
+    hide_index=True,
+    num_rows="fixed",
+    key=f"tabella_{st.session_state.editor_key}",
+)
+
+# Controllo se è stata cliccata l'azione "🗑️ Elimina" sulla prima colonna
+if (edited_df["Elimina"] == "🗑️ Elimina").any():
+    idx_to_del = edited_df[edited_df["Elimina"] == "🗑️ Elimina"].index[0]
+    if st.session_state.riga_da_eliminare != idx_to_del:
+        st.session_state.riga_da_eliminare = idx_to_del
+
+if st.session_state.riga_da_eliminare is not None:
+    conferma_eliminazione_dialog(st.session_state.riga_da_eliminare)
+else:
+    df_clean = normalizza_tipi(edited_df.drop(columns=["Elimina"]))
+    old_df = st.session_state.data
+
+    modificato = False
+    errore_rilevato = False
+
+    for idx in df_clean.index:
+        row = df_clean.loc[idx]
+        old_row = old_df.loc[idx]
+
+        ha_prov = bool(row["Ha_Provvigione"])
+        old_ha_prov = bool(old_row["Ha_Provvigione"])
+        perc = float(row["Perc_Provvigione"])
+        valore = float(row["Valore"])
+
+        if not ha_prov:
+            if perc != 0.0:
+                df_clean.at[idx, "Perc_Provvigione"] = 0.0
+                perc = 0.0
+                modificato = True
+        else:
+            if not old_ha_prov or perc == 0.0:
+                df_clean.at[idx, "Perc_Provvigione"] = 20.0
+                perc = 20.0
+                modificato = True
+
+        nuovo_euro = round(valore * (perc / 100.0), 2) if ha_prov else 0.0
+        if float(row["Provvigione_Euro"]) != nuovo_euro:
+            df_clean.at[idx, "Provvigione_Euro"] = nuovo_euro
+            modificato = True
+
+        data_pag = row["Data_Pagamento"]
+        old_data_pag = old_row["Data_Pagamento"]
+        prov_fatt = str(row["Fattura_Pagamento_Provvigione"]).strip()
+        old_prov_fatt = str(old_row["Fattura_Pagamento_Provvigione"]).strip()
+
+        if prov_fatt != "" and pd.isna(data_pag):
+            if old_prov_fatt != "" and pd.notna(old_data_pag):
+                df_clean.at[idx, "Data_Pagamento"] = old_data_pag
+                st.session_state.msg_errore = (
+                    "Non puoi rimuovere la data di pagamento se è presente "
+                    "la fattura provvigione della manager."
+                )
+                errore_rilevato = True
+            else:
+                df_clean.at[idx, "Fattura_Pagamento_Provvigione"] = ""
+                st.session_state.msg_errore = (
+                    "La manager non può fatturare la provvigione su un "
+                    "progetto non ancora pagato."
+                )
+                errore_rilevato = True
+
+    if modificato or errore_rilevato or not df_uguali(df_clean, old_df):
+        st.session_state.data = df_clean
+        salva_dati(df_clean)
+        if modificato or errore_rilevato:
+            st.session_state.editor_key += 1
+        st.rerun()
