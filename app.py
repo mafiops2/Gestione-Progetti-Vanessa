@@ -79,7 +79,7 @@ def applica_regole_e_calcoli(df_in):
       perc_val = 0.0
 
     # Calcolo Provvigione in Euro
-    prov_ euro = df_el.at[i, "Valore_num"] * (perc_val / 100) if ha_prov else 0.0
+    prov_euro = df_el.at[i, "Valore_num"] * (perc_val / 100) if ha_prov else 0.0
     df_el.at[i, "Provvigione_Euro"] = prov_euro
 
     # Regola 2: La manager non può farmi pagare una provvigione su un progetto non pagato
