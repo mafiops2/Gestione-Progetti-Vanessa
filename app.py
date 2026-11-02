@@ -20,7 +20,6 @@ EXCEL_FILE = "dati_gestione.xlsx"
 def carica_dati():
     if os.path.exists(EXCEL_FILE):
         df = pd.read_excel(EXCEL_FILE, dtype=str).fillna("")
-        # Converti il booleano salvato in formato leggibile per la tabella
         if "Ha_Provvigione" in df.columns:
             df["Ha_Provvigione"] = df["Ha_Provvigione"].apply(lambda x: True if str(x).strip().lower() in ["sì", "si", "true", "1", "yes"] else False)
         return df
@@ -71,13 +70,12 @@ def elabora_e_valida(df_in):
             val_perc = 0.0
         else:
             if pd.isna(val_perc) or val_perc == 0.0:
-                val_perc = 20.0 # Default 20%
+                val_perc = 20.0
                 
         perc_list.append(str(val_perc))
         val_euro = row["Valore_num"] * (val_perc / 100.0) if ha_prov else 0.0
         prov_euro_list.append(str(val_euro))
         
-        # Controllo coerenza pagamenti manager
         data_pag = str(row.get("Data_Pagamento", "")).strip()
         prov_fatt = str(row.get("Fattura_Pagamento_Provvigione", "")).strip()
         
@@ -160,18 +158,7 @@ with st.sidebar:
                 else:
                     st.error("Inserisci almeno Cliente e Nome Progetto.")
 
-    st.divider()
-    st.markdown("### Gestione Righe")
-    riga_da_eliminare = st.selectbox("Seleziona ID Progetto da eliminare", [""] + list(st.session_state.data["ID_Progetto"].astype(str)))
-    if st.button("Elimina Riga Selezionata"):
-        if riga_da_eliminare:
-            st.session_state.data = st.session_state.data[st.session_state.data["ID_Progetto"] != riga_da_eliminare].reset_index(drop=True)
-            cols_to_save = [c for c in st.session_state.data.columns if c not in ["Valore_num", "Provvigione_Euro"]]
-            st.session_state.data[cols_to_save].to_excel(EXCEL_FILE, index=False)
-            st.success(f"Progetto {riga_da_eliminare} eliminato.")
-            st.rerun()
-
-# --- UNICA TABELLA INTERATTIVA E COLORATA A SCHERMO ---
+# --- UNICA TABELLA INTERATTIVA, EDITABILE ED ELIMINABILE A SCHERMO ---
 edited_df = st.data_editor(
     st.session_state.data,
     num_rows="dynamic",
