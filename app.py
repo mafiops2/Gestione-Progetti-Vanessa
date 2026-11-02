@@ -122,4 +122,15 @@ def colora_righe(row):
 # --- TITOLO PULITO ---
 st.title("Vaneblandy")
 
-# --- MENU LATERALE A SCOMPARSA (SI APRE DAL PULSANTE FRECCIA IN ALTO A SINIST
+# --- MENU LATERALE A SCOMPARSA (SI APRE DAL PULSANTE IN ALTO A SINISTRA) ---
+with st.sidebar:
+  st.header("➕ Nuovo Progetto")
+  with st.form("form_nuovo_progetto", clear_on_submit=True):
+    cli = st.text_input("Ragione Sociale Cliente")
+    nom_p = st.text_input("Nome Progetto")
+    val = st.number_input("Valore (€)", min_value=0.0, step=100.0)
+    data_acq = st.date_input("Data di Acquisizione")
+
+    ha_prov_toggle = st.toggle(
+        "La manager (Luana) ha una provvigione?", value=True
+    )
