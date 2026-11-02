@@ -111,4 +111,93 @@ def colora_righe(row):
 
   if prov_fatt and prov_fatt != "" and prov_fatt.lower() != "nan":
     return ["background-color: #e0f2fe"] * len(row)  # Azzurro
-  if data_pag and data_pag != "" and data_pag.lower() !=
+  if data_pag and data_pag != "" and data_pag.lower() != "nan":
+    return ["background-color: #dcfce7"] * len(row)  # Verde
+  if not num_fatt or num_fatt == "" or num_fatt.lower() == "nan":
+    return ["background-color: #ffffff"] * len(row)  # Bianco
+  if pd.notna(data_scad):
+    if oggi > data_scad:
+      return ["background-color: #fee2e2"] * len(row)  # Rosso
+    else:
+      return ["background-color: #fce7f3"] * len(row)  # Rosa
+  return ["background-color: #ffffff"] * len(row)
+
+
+# --- TITOLO ---
+st.title("Vaneblandy")
+
+# --- POPUP / SIDEBAR A SCOMPARSA PER NUOVO PROGETTO ---
+with st.sidebar:
+  st.header("➕ Nuovo Progetto")
+  with st.form("form_nuovo_progetto", clear_on_submit=True):
+    cli = st.text_input("Ragione Sociale Cliente")
+    nom_p = st.text_input("Nome Progetto")
+    val = st.number_input("Valore (€)", min_value=0.0, step=100.0)
+    data_acq = st.date_input("Data di Acquisizione")
+
+    ha_prov_toggle = st.toggle(
+        "La manager (Luana) ha una provvigione?", value=True
+    )
+    perc_prov = st.number_input(
+        "Provvigione (%)", min_value=0.0, max_value=100.0, step=1.0, value=20.0
+    )
+
+    submitted = st.form_submit_button("Salva Progetto")
+    if submitted:
+      if cli and nom_p:
+        nuovo_id = f"PRJ-{len(st.session_state.data)+1:03d}"
+        data_acq_str = data_acq.strftime("%d/%m/%Y")
+        nuova_riga = {
+            "ID_Progetto": nuovo_id,
+            "Cliente": cli,
+            "Nome_Progetto": nom_p,
+            "Valore": str(val),
+            "Data_Acquisizione": data_acq_str,
+            "Ha_Provvigione": "Sì" if ha_prov_toggle else "No",
+            "Perc_Provvigione": str(perc_prov) if ha_prov_toggle else "0.0",
+            "Provvigione_Euro": (
+                str(val * (perc_prov / 100.0)) if ha_prov_toggle else "0.0"
+            ),
+            "Data_Termine": "",
+            "Data_Emissione_Fattura": "",
+            "Numero_Fattura": "",
+            "Data_Scadenza_Fattura": "",
+            "Data_Pagamento": "",
+            "Fattura_Pagamento_Provvigione": "",
+        }
+        st.session_state.data = pd.concat(
+            [st.session_state.data, pd.DataFrame([nuova_riga])],
+            ignore_index=True,
+        )
+        cols_to_save = [
+            c
+            for c in st.session_state.data.columns
+            if c not in ["Valore_num", "Provvigione_Euro"]
+        ]
+        st.session_state.data[cols_to_save].to_excel(EXCEL_FILE, index=False)
+        st.success("Progetto aggiunto con successo!")
+        st.rerun()
+      else:
+        st.error("Inserisci almeno Cliente e Nome Progetto.")
+
+# --- TABELLA EDITABILE A SCHERMO (Tutte le colonne visibili) ---
+edited_df = st.data_editor(
+    st.session_state.data,
+    num_rows="dynamic",
+    use_container_width=True,
+    disabled=["ID_Progetto"],
+)
+
+processed_df = elabora_e_valida(edited_df)
+
+cols_to_save = [
+    c for c in processed_df.columns if c not in ["Valore_num", "Provvigione_Euro"]
+]
+clean_saved_df = processed_df[cols_to_save]
+
+if not clean_saved_df.equals(st.session_state.data):
+  st.session_state.data = clean_saved_df
+  st.session_state.data.to_excel(EXCEL_FILE, index=False)
+
+styled_table = processed_df.style.apply(colora_righe, axis=1)
+st.dataframe(styled_table, use_container_width=True, hide_index=True)
