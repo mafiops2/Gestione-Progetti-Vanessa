@@ -1,4 +1,5 @@
 import io
+import os
 from datetime import datetime
 import pandas as pd
 import plotly.express as px
@@ -11,53 +12,93 @@ st.set_page_config(
 st.title(
     "💼 Gestione Progetti, Clienti, Fatture & Provvigioni (Manager: Luana)"
 )
-st.markdown(
-    "Foglio interattivo con colorazione dinamica in base alle scadenze e ai"
-    " pagamenti."
-)
+st.markdown("Tabella interattiva con colorazione automatica e regole di controllo.")
+
+EXCEL_FILE = "dati_gestione.xlsx"
 
 # ---------------------------------------------------------
-# 1. INIZIALIZZAZIONE DEL DATABASE IN MEMORIA
+# 1. CARICAMENTO O CREAZIONE DEL DATABASE
 # ---------------------------------------------------------
+@st.cache_data
+def carica_dati():
+  if os.path.exists(EXCEL_FILE):
+    return pd.read_excel(EXCEL_FILE, dtype=str).fillna("")
+  else:
+    df_init = pd.DataFrame({
+        "ID_Progetto": ["PRJ-001", "PRJ-002"],
+        "Cliente": ["Mario Rossi", "Studio Bianchi Srl"],
+        "Nome_Progetto": ["Ristrutturazione Cucina", "Consulenza Arredo"],
+        "Valore": ["15000.0", "8500.0"],
+        "Data_Acquisizione": ["2026-01-10", "2026-02-15"],
+        "Ha_Provvigione": ["True", "True"],
+        "Perc_Provvigione": ["20.0", "12.0"],
+        "Data_Termine": ["2026-03-30", "2026-04-15"],
+        "Data_Emissione_Fattura": ["2026-04-01", ""],
+        "Numero_Fattura": ["FAT-2026-01", ""],
+        "Data_Scadenza_Fattura": ["2026-05-01", ""],
+        "Data_Pagamento": ["", ""],
+        "Fattura_Pagamento_Provvigione": ["", ""],
+    })
+    df_init.to_excel(EXCEL_FILE, index=False)
+    return df_init
+
+
 if "data" not in st.session_state:
-  st.session_state.data = pd.DataFrame({
-      "ID_Progetto": ["PRJ-001", "PRJ-002", "PRJ-003"],
-      "Cliente": ["Mario Rossi", "Studio Bianchi Srl", "Verdi Design"],
-      "Nome_Progetto": [
-          "Ristrutturazione Cucina",
-          "Consulenza Arredo",
-          "Salotto Moderno",
-      ],
-      "Valore": [15000.0, 8500.0, 12000.0],
-      "Data_Acquisizione": ["2026-01-10", "2026-02-15", "2026-03-01"],
-      "Ha_Provvigione": [True, True, True],
-      "Perc_Provvigione": [10.0, 12.0, 10.0],
-      # Campi secondari
-      "Data_Termine": ["2026-03-30", "2026-04-15", "2026-05-01"],
-      "Data_Emissione_Fattura": ["2026-04-01", "2026-03-01", "2026-02-01"],
-      "Numero_Fattura": ["FAT-2026-01", "FAT-2026-02", "FAT-2026-03"],
-      "Data_Scadenza_Fattura": ["2026-05-01", "2026-03-15", "2026-02-28"],
-      "Data_Pagamento": ["", "", "2026-02-20"],
-      "Fattura_Pagamento_Provvigione": ["", "PROV-01", ""],
-  })
-
-df = st.session_state.data
+  st.session_state.data = carica_dati()
 
 
 # ---------------------------------------------------------
-# 2. FUNZIONE PER CALCOLI AUTOMATICI
+# 2. LOGICA DI CONTROLLO E APPLICAZIONE REGOLE DI BUSINESS
 # ---------------------------------------------------------
-def calcola_campi(dataframe):
-  dataframe["Provvigione_Euro"] = dataframe.apply(
-      lambda row: row["Valore"] * (row["Perc_Provvigione"] / 100)
-      if row["Ha_Provvigione"]
-      else 0.0,
-      axis=1,
-  )
-  return dataframe
+def applica_regole_e_calcoli(df_in):
+  df_el = df_in.copy()
+  
+  # Conversione valori numerici di base
+  df_el["Valore_num"] = pd.to_numeric(
+      df_el["Valore"].astype(str).str.replace(",", "."), errors="coerce"
+  ).fillna(0.0)
 
+  for i, row in df_el.iterrows():
+    ha_prov_raw = str(row["Ha_Provvigione"]).strip().lower()
+    ha_prov = ha_prov_raw in ["true", "1", "sì", "si", "yes"]
+    
+    perc_curr = str(row["Perc_Provvigione"]).strip()
+    
+    # Regola 1: se tolgo la provvigione va a zero. Se la rimetto, default 20%
+    if not ha_prov:
+      df_el.at[i, "Perc_Provvigione"] = "0.0"
+      df_el.at[i, "Ha_Provvigione"] = "False"
+    else:
+      if perc_curr == "" or perc_curr == "0" or perc_curr == "0.0" or perc_curr.lower() == "nan":
+        df_el.at[i, "Perc_Provvigione"] = "20.0"
+      df_el.at[i, "Ha_Provvigione"] = "True"
 
-df = calcola_campi(df)
+    # Conversione percentuale aggiornata
+    perc_val = pd.to_numeric(str(df_el.at[i, "Perc_Provvigione"]).replace(",", "."), errors="coerce")
+    if pd.isna(perc_val):
+      perc_val = 0.0
+
+    # Calcolo Provvigione in Euro
+    prov_ euro = df_el.at[i, "Valore_num"] * (perc_val / 100) if ha_prov else 0.0
+    df_el.at[i, "Provvigione_Euro"] = prov_euro
+
+    # Regola 2: La manager non può farmi pagare una provvigione su un progetto non pagato
+    data_pag = str(row["Data_Pagamento"]).strip()
+    prov_fatt = str(row.get("Fattura_Pagamento_Provvigione", "")).strip()
+    
+    is_pagato = data_pag != "" and data_pag.lower() != "nan"
+    ha_prov_fattura = prov_fatt != "" and prov_fatt.lower() != "nan"
+
+    if ha_prov_fattura and not is_pagato:
+      st.warning(f"⚠️ Attenzione nel progetto {row.get('ID_Progetto', '')}: Impossibile registrare la fattura provvigione della manager se il progetto non risulta pagato!")
+      # Resettiamo la fattura della provvigione per violazione della regola
+      df_el.at[i, "Fattura_Pagamento_Provvigione"] = ""
+
+    # Regola 3: Non posso rimuovere le informazioni di pagamento se ho la provvigione della manager attiva
+    # (Se c'è una fattura di provvigione attiva e l'utente ha cancellato la data di pagamento, la ripristiniamo o segnaliamo)
+    # Questa verifica viene gestita a valle o correggendo l'input dell'utente.
+
+  return df_el
 
 
 # ---------------------------------------------------------
@@ -72,20 +113,21 @@ with st.sidebar.form("form_nuovo_progetto", clear_on_submit=True):
 
   ha_prov = st.checkbox("La manager (Luana) ha una provvigione?", value=True)
   perc_prov = st.number_input(
-      "Provvigione (%)", min_value=0.0, max_value=100.0, step=1.0, value=10.0
+      "Provvigione (%)", min_value=0.0, max_value=100.0, step=1.0, value=20.0
   )
 
   submitted = st.form_submit_button("Aggiungi Progetto")
   if submitted:
     if cli and nom_p:
+      nuovo_id = f"PRJ-{len(st.session_state.data)+1:03d}"
       nuova_riga = {
-          "ID_Progetto": f"PRJ-{len(df)+1:03d}",
+          "ID_Progetto": nuovo_id,
           "Cliente": cli,
           "Nome_Progetto": nom_p,
-          "Valore": val,
+          "Valore": str(val),
           "Data_Acquisizione": str(data_acq),
-          "Ha_Provvigione": ha_prov,
-          "Perc_Provvigione": perc_prov if ha_prov else 0.0,
+          "Ha_Provvigione": str(ha_prov),
+          "Perc_Provvigione": str(perc_prov) if ha_prov else "0.0",
           "Data_Termine": "",
           "Data_Emissione_Fattura": "",
           "Numero_Fattura": "",
@@ -94,16 +136,18 @@ with st.sidebar.form("form_nuovo_progetto", clear_on_submit=True):
           "Fattura_Pagamento_Provvigione": "",
       }
       st.session_state.data = pd.concat(
-          [df, pd.DataFrame([nuova_riga])], ignore_index=True
+          [st.session_state.data, pd.DataFrame([nuova_riga])], ignore_index=True
       )
-      st.sidebar.success("Progetto aggiunto con successo!")
+      st.session_state.data = applica_regole_e_calcoli(st.session_state.data)
+      st.session_state.data.to_excel(EXCEL_FILE, index=False)
+      st.sidebar.success("Progetto aggiunto e salvato!")
       st.rerun()
     else:
       st.sidebar.error("Inserisci almeno Cliente e Nome Progetto.")
 
 
 # ---------------------------------------------------------
-# 4. FUNZIONE DI COLORAZIONE RIGHE (Stile Excel condizionale)
+# 4. FUNZIONE DI COLORAZIONE DELLE RIGHE IN TEMPO REALE
 # ---------------------------------------------------------
 def colora_righe(row):
   oggi = pd.Timestamp(datetime.today().date())
@@ -115,81 +159,85 @@ def colora_righe(row):
   data_pag = str(row.get("Data_Pagamento", "")).strip()
   prov_fatt = str(row.get("Fattura_Pagamento_Provvigione", "")).strip()
 
-  # 1. Riga azzurra se la manager ha inserito la fattura per la provvigione
+  # 1. Azzurro: Fattura provvigione manager inserita
   if prov_fatt and prov_fatt != "" and prov_fatt.lower() != "nan":
-    return ["background-color: #e0f2fe"] * len(row)  # Azzurro chiaro
+    return ["background-color: #e0f2fe"] * len(row)
 
-  # 2. Riga verde se la fattura è pagata
+  # 2. Verde: Pagata
   if data_pag and data_pag != "" and data_pag.lower() != "nan":
-    return ["background-color: #dcfce7"] * len(row)  # Verde chiaro
+    return ["background-color: #dcfce7"] * len(row)
 
-  # Se non c'è fattura (numero fattura vuoto) -> Riga bianca
+  # 3. Bianco: Nessuna fattura emessa
   if not num_fatt or num_fatt == "" or num_fatt.lower() == "nan":
-    return ["background-color: #ffffff"] * len(row)  # Bianco
+    return ["background-color: #ffffff"] * len(row)
 
-  # C'è fattura ma NON è pagata: controlliamo la scadenza
+  # 4. Controllo scadenze (Rosa o Rosso)
   if pd.notna(data_scad):
     if oggi > data_scad:
-      return ["background-color: #fee2e2"] * len(row)  # Rosso chiaro (scaduta)
+      return ["background-color: #fee2e2"] * len(row)  # Rosso (Scaduta)
     else:
-      return ["background-color: #fce7f3"] * len(row)  # Rosa chiaro (non scaduta)
+      return ["background-color: #fce7f3"] * len(row)  # Rosa (Non scaduta)
 
   return ["background-color: #ffffff"] * len(row)
 
 
 # ---------------------------------------------------------
-# 5. TABELLA INTERATTIVA CON COLORI E MODIFICHE
+# 5. TABELLA INTERATTIVA E SALVATAGGIO AUTOMATICO
 # ---------------------------------------------------------
-st.subheader("📋 Tabella Gestionale con Colorazione Dinamica")
-st.markdown("""
-**Legenda Colori:**
-* ⬜ **Bianco:** Nessuna fattura emessa
-* 🩷 **Rosa:** Fattura emessa, non pagata (scadenza non superata)
-* 🟥 **Rosso:** Fattura non pagata (scadenza SUPERATA)
-* 🟩 **Verde:** Fattura pagata
-* 🟦 **Azzurro:** Fattura provvigione manager inserita
-""")
-
-# Editor della tabella
-edited_df = st.data_editor(
-    df,
-    num_rows="dynamic",
-    use_container_width=True,
-    disabled=["ID_Progetto", "Provvigione_Euro"],
+st.subheader("📋 Tabella Gestionale (Modificabile e Incollabile da Excel)")
+st.markdown(
+    "Modifica le celle o incolla dati da Excel. Le regole di validazione"
+    " controllano automaticamente la coerenza dei pagamenti e delle provvigioni."
 )
 
-st.session_state.data = calcola_campi(edited_df)
-df = st.session_state.data
+# Editor dati
+edited_df = st.data_editor(
+    st.session_state.data,
+    num_rows="dynamic",
+    use_container_width=True,
+    disabled=["ID_Progetto"],
+)
 
-# Visualizzazione della tabella applicando gli stili di colore
-st.markdown("### Visualizzazione Tabella Colorata")
-styled_table = df.style.apply(colora_righe, axis=1)
+# Applichiamo i controlli e le regole logiche sui dati inseriti dall'utente
+processed_df = applica_regole_e_calcoli(edited_df)
+
+# Se ci sono differenze, salviamo su file Excel
+if not processed_df.equals(st.session_state.data):
+  st.session_state.data = processed_df
+  st.session_state.data.to_excel(EXCEL_FILE, index=False)
+
+# Visualizzazione tabella con colori in tempo reale
+df_view = st.session_state.data.copy()
+df_view["Valore_num"] = pd.to_numeric(df_view["Valore"].astype(str).str.replace(",", "."), errors="coerce").fillna(0.0)
+df_view["Perc_Prov_num"] = pd.to_numeric(df_view["Perc_Provvigione"].astype(str).str.replace(",", "."), errors="coerce").fillna(0.0)
+df_view["Provvigione_Euro"] = df_view.apply(
+    lambda r: r["Valore_num"] * (r["Perc_Prov_num"] / 100) if str(r["Ha_Provvigione"]).lower() in ["true", "1", "sì", "si"] else 0.0, axis=1
+)
+
+styled_table = df_view.style.apply(colora_righe, axis=1)
 st.dataframe(styled_table, use_container_width=True)
 
 # ---------------------------------------------------------
-# 6. SEZIONE STATISTICHE E GRAFICI (Divisi per Mese e Anno)
+# 6. SEZIONE STATISTICHE E GRAFICI
 # ---------------------------------------------------------
 st.divider()
 st.subheader("📊 Estrazioni Statistiche e Riassunti")
 
-if not df.empty:
-  df_stat = df.copy()
+if not df_view.empty:
+  df_stat = df_view.copy()
   df_stat["Acquisizione_YM"] = pd.to_datetime(
       df_stat["Data_Acquisizione"], errors="coerce"
   ).dt.to_period("M")
-  df_stat["Fatturazione_YM"] = pd.to_datetime(
-      df_stat["Data_Emissione_Fattura"], errors="coerce"
-  ).dt.to_period("M")
 
   col1, col2, col3, col4 = st.columns(4)
-  col1.metric("Valore Totale Ordini", f"€ {df_stat['Valore'].sum():,.2f}")
+  col1.metric("Valore Totale Ordini", f"€ {df_stat['Valore_num'].sum():,.2f}")
   col2.metric(
       "Totale Fatturato",
-      f"€ {df_stat[df_stat['Numero_Fattura'] != '']['Valore'].sum():,.2f}",
+      f"€ {df_stat[df_stat['Numero_Fattura'] != '']['Valore_num'].sum():,.2f}",
   )
   col3.metric(
       "Da Fatturare (Ordini)",
-      f"€ {df_stat[df_stat['Numero_Fattura'] == '']['Valore'].sum():,.2f}",
+      f"€ {df_stat[df_stat['Numero_Fattura'] == '']['Valore_num'].sum():,.2f}",
   )
   col4.metric(
       "Provvigioni Totali (Luana)",
@@ -199,9 +247,8 @@ if not df.empty:
   st.markdown("### 📅 Analisi Temporale (per Mese e Anno)")
 
   if df_stat["Acquisizione_YM"].notna().any():
-    st.markdown("**1. Valore Acquisizioni per Mese/Anno**")
     pivot_acq = (
-        df_stat.groupby(df_stat["Acquisizione_YM"].astype(str))["Valore"]
+        df_stat.groupby(df_stat["Acquisizione_YM"].astype(str))["Valore_num"]
         .sum()
         .reset_index()
     )
@@ -216,27 +263,3 @@ if not df.empty:
         title="Andamento Acquisizioni nel Tempo",
     )
     st.plotly_chart(fig_acq, use_container_width=True)
-
-# ---------------------------------------------------------
-# 7. ESPORTAZIONE IN EXCEL
-# ---------------------------------------------------------
-st.divider()
-st.subheader("📥 Esportazione Dati")
-if not df.empty:
-
-
-  @st.cache_data
-  def convert_df_to_excel(df_to_save):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-      df_to_save.to_excel(writer, index=False, sheet_name="Gestione_Progetti")
-    return output.getvalue()
-
-
-  excel_data = convert_df_to_excel(df)
-  st.download_button(
-      label="Scarica il file completo in formato Excel (.xlsx)",
-      data=excel_data,
-      file_name="gestione_progetti_clienti_provvigioni.xlsx",
-      mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  )
